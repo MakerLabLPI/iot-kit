@@ -1,0 +1,40 @@
+# Heartbeat and breath clocks (exercise 2), always running once started:
+#
+#   docker compose up -d --build   # start (builds the image the first time)
+#   docker compose logs -f         # every rate change
+#   docker compose down            # stop: the boards stop beating
+#
+# On the kit's docker network: the service reaches the broker as
+# "mosquitto" and serves the page on the published port 8002. The page only
+# shows / remote-controls these clocks.
+name: ex02-rhythms
+
+services:
+  rhythms:
+    build: .
+    image: iot-kit/ex02-rhythms:local
+    container_name: ex02-rhythms
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    networks:
+      - kit
+    environment:
+      TZ: Europe/Paris
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      TOPIC_PREFIX: bme/s04
+      HEART_BPM: "60"
+      BREATH_RATE: "12"
+      WEB_PORT: "8002"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  kit:
+    external: true
+    name: iot-kit

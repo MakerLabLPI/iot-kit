@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traitor's Game — admin</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body { display: block; overflow: auto; font-size: 18px; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 20px 48px; display: grid; gap: 20px; }
+  h1 { font-size: 28px; }
+  h2 { font-size: 20px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  .card { background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  input[type=number] { font: inherit; width: 90px; padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); color: var(--text); }
+  .btn { font-size: 17px; padding: 8px 16px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .06em; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .state { font-size: 14px; padding: 2px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+  .state.active { color: var(--coop); } .state.waiting { color: var(--accent); }
+  .status { color: var(--muted); }
+  .status b { color: var(--text); }
+  a { color: var(--accent); }
+  .log-lines { height: 260px; background: var(--log-bg); border-radius: 12px; color: var(--log-fg); font-size: 14px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-hand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12l4-4 4 1 3 3"/><path d="M22 12l-4-4-4 1"/><path d="M8 13l2 2a1.5 1.5 0 0 0 2-2"/></symbol>
+</defs></svg>
+<div class="wrap">
+  <div>
+    <h1>The Traitor's Game — admin</h1>
+    <p class="status">Round <b id="round">–</b> · phase <b id="phase">–</b> · players in pool <b id="eligible">0</b> · broker <b id="mqtt">?</b> · <a href="/" target="_blank">projector page</a></p>
+  </div>
+
+  <section class="card">
+    <h2>Round loop</h2>
+    <div class="row">
+      <button class="btn primary" id="pause" type="button">Pause after this round</button>
+      <button class="btn" id="resume" type="button">Resume</button>
+      <span class="status" id="pause-status"></span>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <label>Open <input type="number" id="open" min="1" step="1"> s</label>
+      <label>Reveal <input type="number" id="reveal" min="1" step="1"> s</label>
+      <button class="btn" id="durations" type="button">Apply</button>
+      <span class="status">Takes effect from the next phase.</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Players</h2>
+    <table>
+      <thead><tr><th>Player</th><th>State</th><th class="n">Points</th><th class="n">Rounds</th><th class="n">Misses</th><th></th></tr></thead>
+      <tbody id="players"></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Data</h2>
+    <div class="row">
+      <a class="btn" href="/admin/log.csv" download>Download round log (CSV)</a>
+      <button class="btn danger" id="reset" type="button">Reset all scores and history</button>
+      <span class="status" id="reset-status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Live log</h2>
+    <div class="log-lines" id="log-lines"></div>
+  </section>
+</div>
+
+<script id="initial" type="application/json">__INITIAL_STATE__</script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  let state = JSON.parse($("initial").textContent);
+  let editing = false;
+
+  function render() {
+    const s = state;
+    $("round").textContent = s.round || "–";
+    $("phase").textContent = s.paused ? "paused" : s.phase;
+    $("eligible").textContent = s.eligible;
+    $("mqtt").textContent = s.mqtt_connected ? "connected" : "DOWN";
+    $("pause-status").textContent = s.paused ? "Paused." : s.pause_pending ? "Pausing after the current round…" : "Running.";
+    if (!editing) { $("open").value = s.open_seconds; $("reveal").value = s.reveal_seconds; }
+    const ps = Object.values(s.players).sort((a, b) => a.id.localeCompare(b.id));
+    $("players").innerHTML = ps.map((p) =>
+      `<tr><td>${esc(p.id)}</td><td><span class="state ${p.state}">${p.state}</span></td>` +
+      `<td class="n">${p.points}</td><td class="n">${p.rounds_played}</td><td class="n">${p.misses}</td>` +
+      `<td>${p.state === "dropped" ? `<button class="btn" data-reinstate="${esc(p.id)}">Reinstate</button>` : `<button class="btn ghost" data-kick="${esc(p.id)}">Kick</button>`}</td></tr>`
+    ).join("") || `<tr><td colspan="6" class="status">No players yet.</td></tr>`;
+    const box = $("log-lines");
+    box.innerHTML = s.feed.slice(-60).map((e) =>
+      `<div class="ln ${e.kind}"><span class="t">${new Date(e.ts * 1000).toLocaleTimeString("en-GB", { hour12: false })}</span>  ${esc(e.text)}</div>`).join("");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  $("players").onclick = (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    if (b.dataset.kick) post("/admin/api/kick", { id: b.dataset.kick });
+    if (b.dataset.reinstate) post("/admin/api/reinstate", { id: b.dataset.reinstate });
+  };
+  $("pause").onclick = () => post("/admin/api/pause", { paused: true });
+  $("resume").onclick = () => post("/admin/api/pause", { paused: false });
+  $("durations").onclick = () => { editing = false; post("/admin/api/durations", { open: +$("open").value, reveal: +$("reveal").value }); };
+  for (const id of ["open", "reveal"]) $(id).onfocus = () => { editing = true; };
+  let armed = false;
+  $("reset").onclick = () => {
+    if (!armed) { armed = true; $("reset-status").textContent = "Click again to confirm."; setTimeout(() => { armed = false; $("reset-status").textContent = ""; }, 5000); return; }
+    armed = false; $("reset-status").textContent = "Reset.";
+    post("/admin/api/reset");
+  };
+
+  const es = new EventSource("/events");
+  es.addEventListener("state", (ev) => { state = JSON.parse(ev.data); render(); });
+  render();
+})();
+</script>
+</body>
+</html>

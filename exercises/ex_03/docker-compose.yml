@@ -1,0 +1,56 @@
+# The Traitor's Game (Lab 3): the game master, started by hand for the lab.
+#
+#   docker compose up -d --build   # start (builds the image the first time)
+#   docker compose logs -f         # every MQTT message, one line each
+#   docker compose down            # stop; the game state is in memory only
+#
+# On the kit's docker network: the service reaches the broker as
+# "mosquitto" and serves the page on the published port 8003.
+name: ex03-traitors-game
+
+services:
+  game-master:
+    build: .
+    image: iot-kit/ex03-game-master:local
+    container_name: ex03-game-master
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    networks:
+      - kit
+    environment:
+      TZ: Europe/Paris
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      TOPIC_PREFIX: bme/s04/game
+      ROUND_OPEN_SECONDS: "30"
+      ROUND_REVEAL_SECONDS: "30"
+      MAX_MISSED_ROUNDS: "2"
+      WEB_PORT: "8003"
+      # Empty = /admin disabled. Set it in the shell: ADMIN_PASSWORD=... docker compose up -d
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Only for a machine without a broker (a laptop): on the Pi, Mosquitto
+  # already runs from broker/docker-compose.yml, so this stays off unless
+  # you ask for it:  docker compose --profile broker up -d
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    profiles: ["broker"]
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    networks:
+      - kit
+    command: ["sh", "-c", "printf 'listener 1883 0.0.0.0\\nallow_anonymous true\\n' > /tmp/mosquitto.conf && exec mosquitto -c /tmp/mosquitto.conf"]
+
+networks:
+  kit:
+    external: true
+    name: iot-kit

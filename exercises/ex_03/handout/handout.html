@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Traitor's Game — student handout</title>
+<style>
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  :root {
+    --text: #1d1b18; --muted: #6e6960; --line: #d9d4ca; --soft: #f4f1ea;
+    --accent: #d97a06; --coop: #1f8f4e; --betray: #cf3f3a; --code-bg: #f6f4ef;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; color: var(--text); font: 10.5pt/1.4 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 24pt; margin: 0 0 2mm; letter-spacing: -0.01em; }
+  h1 small { display: block; font-size: 10.5pt; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-top: 1mm; }
+  h2 { font-size: 13.5pt; margin: 6mm 0 2.5mm; padding-bottom: 1mm; border-bottom: 2px solid var(--accent); }
+  h3 { font-size: 11pt; margin: 4mm 0 1.5mm; color: var(--text); }
+  p { margin: 0 0 2mm; }
+  ul { margin: 0 0 2mm; padding-left: 5mm; } li { margin-bottom: 0.8mm; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+  code { background: var(--code-bg); padding: 0.2mm 1.2mm; border-radius: 1mm; font-size: 9.3pt; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 2mm; padding: 2.5mm 3mm; font-size: 8.6pt; line-height: 1.38; margin: 0 0 2.5mm; white-space: pre; overflow: hidden; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .cm { color: var(--muted); }
+  .kw { color: #7a3e9d; } .fn { color: #0b5fa5; } .str { color: var(--coop); }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 3mm; font-size: 9.8pt; }
+  th, td { text-align: left; padding: 1.4mm 2.2mm; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  td.n { text-align: center; font-weight: 700; font-size: 11pt; }
+  .C { color: var(--coop); font-weight: 700; } .B { color: var(--betray); font-weight: 700; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; }
+  .box { background: var(--soft); border-radius: 2.5mm; padding: 3mm 4mm; margin: 0 0 3mm; }
+  .box h3 { margin-top: 0; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 1mm 4mm; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 600; }
+  .kv dd code { font-size: 10pt; }
+  .muted { color: var(--muted); }
+  .page-break { break-before: page; }
+  .steps { counter-reset: s; list-style: none; padding: 0; }
+  .steps li { counter-increment: s; position: relative; padding-left: 8mm; margin-bottom: 1.5mm; }
+  .steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 5.5mm; height: 5.5mm; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 8.5pt; text-align: center; line-height: 5.5mm; }
+  .tip { border-left: 3px solid var(--accent); padding: 1mm 0 1mm 3mm; margin: 2mm 0 3mm; }
+  .footer { margin-top: 4mm; font-size: 8.5pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 2mm; }
+</style>
+</head>
+<body>
+
+<h1>The Traitor's Game <small>BME M2 · Session 4 · Lab 3 — ESP32, buttons, MQTT</small></h1>
+
+<p>A live tournament. Every round the game master pairs you with another board. You press <span class="C">Cooperate</span> or <span class="B">Betray</span>; your board gets your points back; the wall shows everything. Your job: make your ESP32 join, play, and light an LED with the result.</p>
+
+<div class="cols">
+<div>
+<h2>Rules</h2>
+<table>
+  <tr><th>You</th><th>Opponent</th><th>You get</th><th>They get</th></tr>
+  <tr><td class="C">Cooperate</td><td class="C">Cooperate</td><td class="n">3</td><td class="n">3</td></tr>
+  <tr><td class="B">Betray</td><td class="B">Betray</td><td class="n">1</td><td class="n">1</td></tr>
+  <tr><td class="B">Betray</td><td class="C">Cooperate</td><td class="n">5</td><td class="n">0</td></tr>
+  <tr><td class="C">Cooperate</td><td class="B">Betray</td><td class="n">0</td><td class="n">5</td></tr>
+</table>
+<ul>
+  <li><b>Open, 30 s:</b> pairings are on the wall, press your button. The clock runs the full 30 s for everyone.</li>
+  <li><b>Reveal, 30 s:</b> all moves and points shown at once. Then the next round opens by itself.</li>
+  <li>Only your <b>first</b> press of a round counts. Presses while the round is closed are ignored.</li>
+  <li>No press before the clock ends → a <b>random</b> move for you (dice badge on the wall).</li>
+  <li>Miss 2 rounds in a row → you are <b>dropped</b>. Reset your board (it joins again) to come back; your score is kept.</li>
+  <li>Odd number of players → one sits out that round, in turn.</li>
+  <li>Ranking is by total points: a board that works early scores more rounds.</li>
+</ul>
+</div>
+<div>
+<h2>Network</h2>
+<div class="box">
+<dl class="kv">
+  <dt>WiFi</dt><dd><code>iot-kit</code></dd>
+  <dt>Password</dt><dd><code>SuperStrongPassword1234</code></dd>
+  <dt>MQTT broker</dt><dd><code>192.168.50.1</code> port <code>1883</code>, no login</dd>
+  <dt>The wall</dt><dd><code>http://192.168.50.1:8003/</code></dd>
+  <dt>MQTT in a browser</dt><dd><code>http://192.168.50.1:8090/</code> (MQTTX)</dd>
+</dl>
+</div>
+<h3>Your name</h3>
+<p>Pick a nickname: it is shown on the wall <b>and</b> it is your identity on the broker (the topic path is the only thing that tells the game who pressed).</p>
+<ul>
+  <li>Letters, digits, <code>-</code> and <code>_</code> only. <b>No spaces, no accents.</b></li>
+  <li>Unique in the room. Case matters: <code>Alan</code> and <code>alan</code> are two players.</li>
+  <li>Max 24 characters. A wrong name shows as a red line on the wall.</li>
+</ul>
+</div>
+</div>
+
+<h2>Topics</h2>
+<table>
+  <tr><th>Topic</th><th>Who sends</th><th>Payload</th><th>When</th></tr>
+  <tr><td><code>bme/s04/game/<b>NAME</b>/join</code></td><td>your board</td><td>anything, e.g. <code>hi</code></td><td>once, at the end of <code>setup()</code></td></tr>
+  <tr><td><code>bme/s04/game/<b>NAME</b>/move</code></td><td>your board</td><td><code>C</code> or <code>B</code></td><td>on a button press, during Open</td></tr>
+  <tr><td><code>bme/s04/game/<b>NAME</b>/result</code></td><td>the game master</td><td><code>0</code>, <code>1</code>, <code>3</code> or <code>5</code></td><td>after each round you played — <b>subscribe</b> to it</td></tr>
+</table>
+<p>Everything your board sends appears on the wall within a second, even between rounds: a join is a cyan line, a move a white one, an ignored move a grey one, a mistake a red one. That is how you know your board works. <code>result</code> is points, not a verdict: <code>points &gt;= 3</code> is good news.</p>
+
+<h2>Putting it together</h2>
+<ol class="steps">
+  <li>Start from your Lab 2b sketch. Add <code>NAME</code> and the three topic strings at the top.</li>
+  <li>In <code>setup()</code>, after connecting: <code>subscribe</code> to your <code>result</code> topic, <code>publish</code> on your <code>join</code> topic. Watch your name appear on the wall.</li>
+  <li>In <code>loop()</code>: read the buttons, <code>publish</code> <code>C</code> or <code>B</code> on your <code>move</code> topic. Watch the line appear on the wall, then "Locked in" on your card.</li>
+  <li>In the callback: turn the payload into a number, light the good LED if <code>points &gt;= 3</code>, the bad one otherwise, switch off after 1 s without <code>delay()</code>.</li>
+  <li>Done early? Replace <code>delay(200)</code> with a <code>millis()</code> debounce. Remember your own move and show all four outcomes. Think about a strategy: your last result tells you what your opponent did (3 or 0: they cooperated).</li>
+</ol>
+
+<div class="page-break"></div>
+
+<h2>Cheat sheet</h2>
+<div class="cols">
+<div>
+<h3>WiFi</h3>
+<pre><code><span class="kw">#include</span> &lt;WiFi.h&gt;
+
+WiFi.<span class="fn">begin</span>(<span class="str">"iot-kit"</span>, <span class="str">"SuperStrongPassword1234"</span>);
+<span class="kw">while</span> (WiFi.<span class="fn">status</span>() != WL_CONNECTED) delay(500);
+WiFi.<span class="fn">setSleep</span>(<span class="kw">false</span>);   <span class="cm">// radio awake: messages arrive at once</span>
+Serial.println(WiFi.<span class="fn">localIP</span>());</code></pre>
+
+<h3>MQTT (PubSubClient)</h3>
+<pre><code><span class="kw">#include</span> &lt;PubSubClient.h&gt;
+WiFiClient net;
+PubSubClient client(net);
+
+<span class="cm">// in setup(), after WiFi:</span>
+client.<span class="fn">setServer</span>(<span class="str">"192.168.50.1"</span>, 1883);
+client.<span class="fn">setCallback</span>(onMessage);      <span class="cm">// who handles received messages</span>
+<span class="kw">while</span> (!client.<span class="fn">connect</span>(NAME)) delay(500);  <span class="cm">// client id: unique</span>
+client.<span class="fn">subscribe</span>(<span class="str">"bme/s04/game/Sev/result"</span>);
+client.<span class="fn">publish</span>(<span class="str">"bme/s04/game/Sev/join"</span>, <span class="str">"hi"</span>);
+
+<span class="cm">// in loop(), every time, never block for long:</span>
+client.<span class="fn">loop</span>();                      <span class="cm">// receives, keeps the link alive</span>
+<span class="kw">if</span> (!client.<span class="fn">connected</span>()) { <span class="cm">/* reconnect */</span> }</code></pre>
+
+<h3>Build a topic from your name</h3>
+<pre><code><span class="kw">const char*</span> NAME = <span class="str">"Sev"</span>;
+String topicMove = String(<span class="str">"bme/s04/game/"</span>) + NAME + <span class="str">"/move"</span>;
+client.<span class="fn">publish</span>(topicMove.<span class="fn">c_str</span>(), <span class="str">"C"</span>);   <span class="cm">// String -&gt; char*</span></code></pre>
+
+<h3>Receiving: the callback</h3>
+<pre><code><span class="kw">void</span> <span class="fn">onMessage</span>(<span class="kw">char*</span> topic, <span class="kw">byte*</span> payload, <span class="kw">unsigned int</span> len) {
+  String msg;
+  <span class="kw">for</span> (<span class="kw">unsigned int</span> i = 0; i &lt; len; i++) msg += (<span class="kw">char</span>)payload[i];
+  <span class="kw">int</span> points = msg.<span class="fn">toInt</span>();        <span class="cm">// "3" -&gt; 3</span>
+  <span class="cm">// keep it short: no delay(), no publish() in here</span>
+}</code></pre>
+</div>
+<div>
+<h3>Serial monitor</h3>
+<pre><code>Serial.<span class="fn">begin</span>(115200);               <span class="cm">// in setup()</span>
+Serial.<span class="fn">println</span>(<span class="str">"joined"</span>);
+Serial.<span class="fn">print</span>(<span class="str">"points: "</span>); Serial.println(points);
+Serial.<span class="fn">printf</span>(<span class="str">"got %d points\n"</span>, points);</code></pre>
+<p class="muted">Arduino IDE: Tools → Serial Monitor, set <b>115200 baud</b>. Printing is your first debugging tool.</p>
+
+<h3>Buttons</h3>
+<pre><code><span class="kw">const int</span> BTN = 32;             <span class="cm">// button between pin and GND</span>
+pinMode(BTN, INPUT_PULLUP);     <span class="cm">// in setup()</span>
+<span class="kw">if</span> (digitalRead(BTN) == LOW) {  <span class="cm">// LOW = pressed (pull-up!)</span>
+  ...
+  delay(200);                   <span class="cm">// crude debounce, blocks 200 ms</span>
+}</code></pre>
+<p class="muted">The <b>BOOT</b> button of the dev board is on GPIO <code>0</code>, also active LOW. Do not hold it while the board resets (that is flashing mode).</p>
+
+<h3>LEDs without delay()</h3>
+<pre><code><span class="kw">const int</span> LED = 25;             <span class="cm">// LED + resistor to GND</span>
+<span class="kw">unsigned long</span> ledOffAt = 0;
+pinMode(LED, OUTPUT);           <span class="cm">// in setup()</span>
+
+digitalWrite(LED, HIGH);        <span class="cm">// switch on...</span>
+ledOffAt = millis() + 1000;     <span class="cm">// ...and remember when to stop</span>
+
+<span class="cm">// in loop():</span>
+<span class="kw">if</span> (ledOffAt &amp;&amp; millis() &gt; ledOffAt) {
+  digitalWrite(LED, LOW);
+  ledOffAt = 0;
+}</code></pre>
+<p class="muted">On-board blue LED: GPIO <code>2</code> on most ESP32-WROOM-32 dev boards.</p>
+
+<h3>Debounce with millis() (extension)</h3>
+<pre><code><span class="kw">unsigned long</span> lastPress = 0;
+<span class="kw">if</span> (digitalRead(BTN) == LOW &amp;&amp; millis() - lastPress &gt; 300) {
+  lastPress = millis();
+  client.publish(topicMove.c_str(), <span class="str">"C"</span>);
+}</code></pre>
+</div>
+</div>
+
+<div class="tip">
+<b>Nothing on the wall?</b> Check the Serial monitor first: WiFi connected? Broker connected? Then check the topic, character by character — a typo in <code>bme/s04/game/</code> is the usual suspect. Grey line "ignored — round closed": press during <b>Open</b>. Red line: wrong payload or wrong name. LED never lights: did you <code>subscribe</code>, and is <code>client.loop()</code> called in <code>loop()</code>?
+</div>
+
+<p class="footer">Everything on this network is open: no password on the broker, every message readable by everyone. Keep that in mind until the end of the session.</p>
+
+</body>
+</html>

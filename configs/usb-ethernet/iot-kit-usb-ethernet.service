@@ -1,0 +1,11 @@
+# iot-kit: started by /etc/udev/rules.d/41-iot-kit-usb-ethernet.rules when
+# the WAN adapter appears in CD-ROM mode. Stays "active" after its first run,
+# so the rule cannot start it a second time in the same boot: an adapter that
+# comes back in CD-ROM mode again does not make the ports cycle forever.
+[Unit]
+Description=iot-kit: power-cycle the USB ports, the WAN adapter booted as a CD-ROM
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/iot-kit-usb-ethernet

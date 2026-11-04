@@ -1,0 +1,12 @@
+# iot-kit: log of the broker container. copytruncate because the broker
+# keeps the file open and cannot be told from here to reopen it.
+/var/log/iot-kit/mosquitto/mosquitto.log {
+    weekly
+    rotate 4
+    maxsize 20M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}

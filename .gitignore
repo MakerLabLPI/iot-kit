@@ -1,0 +1,8 @@
+.DS_Store
+.claude/
+.env
+__pycache__/
+.pytest_cache/
+*.pyc
+kit.local.env
+exercises/ex_03/slides-brief.md

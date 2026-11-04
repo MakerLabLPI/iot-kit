@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# iot-kit: turns the WAN USB-Ethernet adapter from a CD-ROM (0bda:8151) into
+# a network card (0bda:8156) by cutting its power for a moment, which is the
+# only thing this adapter listens to (see 41-iot-kit-usb-ethernet.rules).
+#
+# The Pi 5 cannot switch one USB port alone: all four go off together, for
+# about 3 seconds. Nothing else of the kit is on USB.
+#
+# Installed as /usr/local/sbin/iot-kit-usb-ethernet, run by
+# iot-kit-usb-ethernet.service; can be run by hand as root.
+set -euo pipefail
+
+if ! lsusb -d 0bda:8151 > /dev/null; then
+  echo "the adapter is not in CD-ROM mode, nothing to do"
+  exit 0
+fi
+
+# The hub numbers differ between kernels, ask each time
+hubs=$(uhubctl | sed -n 's/^Current status for hub \([0-9.-]*\) .*/\1/p')
+if [[ -z $hubs ]]; then
+  echo "uhubctl found no hub with power switching" >&2
+  exit 1
+fi
+
+# Power really goes off only once every hub is off
+for hub in $hubs; do uhubctl -l "$hub" -a off > /dev/null; done
+sleep 3
+for hub in $hubs; do uhubctl -l "$hub" -a on > /dev/null; done
+
+# Enumeration takes a moment
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 1
+  if lsusb -d 0bda:8156 > /dev/null; then
+    echo "USB ports power-cycled, the adapter is a network card now"
+    exit 0
+  fi
+done
+echo "USB ports power-cycled, but the adapter is still not a network card: $(lsusb -d 0bda: || echo 'gone')" >&2
+exit 1

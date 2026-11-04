@@ -1,0 +1,120 @@
+# Web UIs for the workshop, always running (unlike the UniFi controller).
+#
+# On the kit's docker network, like the broker and the exercises: whoever
+# edits Node-RED flows can run code, and that code stays inside the
+# container instead of sitting on the router's own network stack. The
+# broker is reachable as "broker.lan" (an alias of the mosquitto container).
+name: tools
+
+services:
+  nodered:
+    build: ./nodered
+    image: iot-kit/nodered:local
+    container_name: nodered
+    restart: unless-stopped
+    command: ["--settings", "/usr/src/node-red/kit-settings.js"]
+    environment:
+      TZ: Europe/Paris
+    ports:
+      - "1880:1880"
+    volumes:
+      - /var/lib/iot-kit/nodered:/data
+      - /etc/iot-kit/nodered:/run/iot-kit:ro
+    # The image's own check reads /data/settings.js, which we do not have
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:1880/', (r) => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - kit
+
+  mqttx-web:
+    image: emqx/mqttx-web:latest
+    container_name: mqttx-web
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    networks:
+      - kit
+
+  # Projector page: every message under one topic filter, one card per topic
+  # (latest value, sparkline, live log) and the WiFi/broker strip the students
+  # copy from. Pure static HTML, MQTT over WebSockets to mosquitto:9001.
+  #   http://192.168.50.1:8000/?topic=bme/s04/steps/%23
+  monitor:
+    build: ./monitor
+    image: iot-kit/monitor:local
+    container_name: monitor
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - kit
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Who is on the LAN: pings every DHCP lease and reads the ARP table,
+  # publishes bme/s04/net/{present,joined,left}. The one service here on
+  # host networking: ARP only exists on eth0 itself.
+  presence:
+    build: ./presence
+    image: iot-kit/presence:local
+    container_name: presence
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Europe/Paris
+      MQTT_HOST: localhost
+      IFACE: eth0
+      PERIOD: "5"
+      MISSES: "3"
+      TOPIC: bme/s04/net
+    volumes:
+      - /var/lib/misc/dnsmasq.leases:/var/lib/misc/dnsmasq.leases:ro
+
+  # The NeoPixel strip (data on GPIO 10): the kit's status panel plus 8
+  # LEDs anyone can set over MQTT, see leds/leds.py. Driven by the PIO of
+  # the Pi 5's RP1 chip (/dev/pio0) through Adafruit's Pi 5 NeoPixel driver.
+  #   LED 0 power | 1-2 MQTT | 3-4 WiFi | 5-12 iot-kit/leds/0..7
+  #   counted from the far end of the strip (REVERSE "1")
+  leds:
+    build: ./leds
+    image: iot-kit/leds:local
+    container_name: leds
+    restart: unless-stopped
+    networks:
+      - kit
+    environment:
+      TZ: Europe/Paris
+      MQTT_HOST: mosquitto
+      NET_PREFIX: bme/s04/net     # dnsmasq hook (dhcp) and presence (left)
+      LED_TOPIC: iot-kit/leds     # the free LEDs: iot-kit/leds/0..7 and /all
+      LED_PIN: "10"               # GPIO of the strip's data line
+      REVERSE: "1"                # count the layout from the far end of the strip
+      BRIGHTNESS: "0.3"
+      # Topic prefixes whose messages do not flash orange, comma separated,
+      # e.g. "bme/s04/heartbeat,bme/s04/breath". Empty: every message does.
+      QUIET_TOPICS: ""
+      REFRESH: "5"                # rewrite the strip every 5 s even if unchanged
+      CONSOLE: "0"                # "1": also draw the strip in the log
+    devices:
+      - /dev/pio0:/dev/pio0
+    logging:
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+networks:
+  kit:
+    external: true
+    name: iot-kit

@@ -1,0 +1,37 @@
+# The MQTT broker. Always running, restarted at boot and after a crash.
+#
+# On the kit's docker network (created by scripts/phase4-mosquitto.sh) with
+# its two ports published: the LAN reaches them through the firewall's
+# forward chain, and the other containers reach the broker as "mosquitto"
+# or "broker.lan". The log shows the real address of every LAN client.
+name: broker
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: always
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # MQTT over WebSockets
+    networks:
+      kit:
+        aliases:
+          - broker.lan
+    volumes:
+      - /etc/iot-kit/mosquitto:/mosquitto/config:ro
+      - /var/lib/iot-kit/mosquitto:/mosquitto/data
+      - /var/log/iot-kit/mosquitto:/mosquitto/log
+      # Local time in the log
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "127.0.0.1", "-t", "$$SYS/broker/uptime", "-C", "1", "-W", "3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  kit:
+    external: true
+    name: iot-kit

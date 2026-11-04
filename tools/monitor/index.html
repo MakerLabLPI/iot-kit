@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Topic monitor</title>
+<!--
+  A projector page: everything published under one topic filter, one card
+  per topic, with the latest value, a sparkline of the numeric values and a
+  live log. Talks MQTT over WebSockets to the broker (port 9001), no library.
+
+  Served from the Pi:   http://192.168.50.1:8000/
+  Pick the filter:      ?topic=bme/s04/steps/%23   (# is %23 in a URL)
+  Another broker:       &broker=ws://localhost:9001
+  Stale after N s:      &stale=30
+  The strip students copy from: &ssid=iot-kit&pass=...&host=192.168.50.1&port=1883
+  Hide the strip:       &howto=0
+-->
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #14181f; --muted: #6b7380;
+    --line: #e1e5ea; --accent: #0b63ce; --accent-soft: #e4efff;
+    --ok: #178a46; --warn: #b7791f; --bad: #c03a2b; --stale: #a2a9b4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 18px/1.35 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--card);
+  }
+  header h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+  header form { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 320px; }
+  header input {
+    flex: 1; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 20px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px;
+    color: var(--ink); background: #fff;
+  }
+  header button {
+    font: inherit; font-size: 17px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  }
+  header button.secondary { background: #fff; color: var(--accent); }
+  .stats { display: flex; gap: 22px; color: var(--muted); font-size: 16px; white-space: nowrap; }
+  .stats b { color: var(--ink); font-size: 20px; font-variant-numeric: tabular-nums; }
+  .status { font-size: 15px; padding: 4px 12px; border-radius: 999px; background: #eee; color: var(--muted); white-space: nowrap; }
+  .status.online { background: #dff5e6; color: var(--ok); }
+  .status.offline { background: #fde3df; color: var(--bad); }
+  .status.connecting { background: #fff1d6; color: var(--warn); }
+
+  .howto {
+    display: flex; flex-wrap: wrap; gap: 10px 36px; align-items: baseline;
+    padding: 10px 24px; background: var(--accent-soft); border-bottom: 1px solid var(--line);
+    font-size: 17px; color: var(--muted);
+  }
+  .howto div { display: flex; gap: 10px; align-items: baseline; white-space: nowrap; }
+  .howto code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; font-weight: 600;
+    color: var(--ink); background: #fff; padding: 2px 10px; border-radius: 6px; border: 1px solid #c9dbf5;
+    user-select: all;
+  }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #cards {
+    flex: 1; overflow-y: auto; padding: 18px 24px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: min-content; gap: 16px; align-content: start;
+  }
+  #empty {
+    grid-column: 1 / -1; color: var(--muted); font-size: 22px; padding: 60px 0; text-align: center;
+  }
+  #empty code { font-size: 20px; background: var(--accent-soft); padding: 2px 8px; border-radius: 6px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 18px 12px; display: flex; flex-direction: column; gap: 6px;
+    transition: box-shadow 0.15s;
+  }
+  .card.fresh { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 4px var(--accent); }
+  .card.stale { opacity: 0.5; }
+  .topic {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px;
+    color: var(--muted); overflow-wrap: anywhere;
+  }
+  .topic b { color: var(--ink); font-size: 22px; font-weight: 700; }
+  .value {
+    font-size: 54px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+  }
+  .value.text { font-size: 26px; font-weight: 500; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .value .unit { font-size: 22px; color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .spark { width: 100%; height: 48px; display: block; }
+  .spark polyline { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .dot { fill: var(--accent); }
+  .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 15px; font-variant-numeric: tabular-nums; }
+
+  aside {
+    width: 34%; max-width: 560px; min-width: 360px; border-left: 1px solid var(--line);
+    background: var(--card); display: flex; flex-direction: column; min-height: 0;
+  }
+  aside h2 { margin: 0; padding: 12px 18px; font-size: 15px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--line); }
+  #log { flex: 1; overflow-y: auto; margin: 0; padding: 6px 0; list-style: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
+  #log li { display: grid; grid-template-columns: 76px 1fr; gap: 0 10px; padding: 5px 18px; border-bottom: 1px solid #f0f2f5; }
+  #log .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #log .k { color: var(--accent); overflow-wrap: anywhere; }
+  #log .p { grid-column: 2; color: var(--ink); overflow-wrap: anywhere; white-space: pre-wrap; }
+  @media (max-width: 900px) { aside { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Topic monitor</h1>
+  <form id="form">
+    <input id="filter" spellcheck="false" autocomplete="off" aria-label="topic filter">
+    <button type="submit">Subscribe</button>
+    <button type="button" class="secondary" id="clear">Clear</button>
+  </form>
+  <div class="stats">
+    <span><b id="n-topics">0</b> topics</span>
+    <span><b id="n-msgs">0</b> messages</span>
+    <span><b id="rate">0</b> msg/s</span>
+  </div>
+  <span id="status" class="status connecting">connecting</span>
+</header>
+<div class="howto" id="howto">
+  <div>WiFi <code id="h-ssid"></code></div>
+  <div>password <code id="h-pass"></code></div>
+  <div>broker <code id="h-broker"></code></div>
+  <div>port <code id="h-port"></code></div>
+  <div>publish on <code id="h-topic"></code></div>
+</div>
+<main>
+  <section id="cards">
+    <div id="empty">Waiting for messages on <code id="empty-filter"></code></div>
+  </section>
+  <aside>
+    <h2>Live log</h2>
+    <ul id="log"></ul>
+  </aside>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+// Served from the Pi: the broker is on the same host. Opened as a file: the kit's address.
+const BROKER = params.get('broker')
+  || (location.protocol.startsWith('http') ? 'ws://' + location.hostname + ':9001' : 'ws://192.168.50.1:9001');
+const STALE_S = Number(params.get('stale') || 30);
+const HISTORY = 60;          // points kept per sparkline
+const LOG_LINES = 200;
+const KEEPALIVE_S = 30;
+const RECONNECT_MS = 2000;
+
+let filter = params.get('topic') || 'bme/s04/steps/#';
+
+// ---- MQTT 3.1.1 over WebSockets, the little a page needs ------------------
+
+const utf8 = new TextEncoder();
+const utf8d = new TextDecoder();
+
+function mqttString(s) {
+  const bytes = utf8.encode(s);
+  return [bytes.length >> 8, bytes.length & 0xff, ...bytes];
+}
+
+function packet(type, body = []) {
+  const length = [];
+  let n = body.length;
+  do {
+    const digit = n % 128;
+    n = Math.floor(n / 128);
+    length.push(n > 0 ? digit | 0x80 : digit);
+  } while (n > 0);
+  return new Uint8Array([type, ...length, ...body]);
+}
+
+const CONNECT = 0x10, CONNACK = 0x20, PUBLISH = 0x30, SUBSCRIBE = 0x82, UNSUBSCRIBE = 0xa2, PINGREQ = 0xc0;
+
+const clientId = 'monitor-' + Math.random().toString(16).slice(2, 10);
+let ws = null;
+let online = false;
+let packetId = 0;
+let subscribed = null;       // the filter the broker currently knows
+
+function connect() {
+  setStatus('connecting', 'connecting to ' + BROKER);
+  ws = new WebSocket(BROKER, 'mqtt');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    const cleanSession = 0x02;
+    ws.send(packet(CONNECT, [
+      ...mqttString('MQTT'), 4, cleanSession, 0, KEEPALIVE_S,
+      ...mqttString(clientId),
+    ]));
+  };
+
+  ws.onmessage = (event) => {
+    const bytes = new Uint8Array(event.data);
+    let i = 0;
+    while (i < bytes.length) {
+      const header = bytes[i];
+      const type = header & 0xf0;
+      let n = 0, shift = 1, j = i + 1;
+      do { n += (bytes[j] & 0x7f) * shift; shift *= 128; } while (bytes[j++] & 0x80);
+      const body = bytes.subarray(j, j + n);
+      i = j + n;
+      if (type === CONNACK) onConnack(body);
+      else if (type === PUBLISH) onPublish(header, body);
+    }
+  };
+
+  ws.onclose = () => {
+    online = false;
+    subscribed = null;
+    setStatus('offline', BROKER + ' unreachable, retrying');
+    setTimeout(connect, RECONNECT_MS);
+  };
+}
+
+function onConnack(body) {
+  if (body[1] !== 0) {
+    setStatus('offline', 'broker refused the connection (code ' + body[1] + ')');
+    ws.close();
+    return;
+  }
+  online = true;
+  setStatus('online', 'connected to ' + BROKER);
+  sendSubscribe();
+}
+
+function nextPacketId() {
+  packetId = (packetId % 65535) + 1;
+  return [packetId >> 8, packetId & 0xff];
+}
+
+function sendSubscribe() {
+  if (!online) return;
+  if (subscribed && subscribed !== filter) {
+    ws.send(packet(UNSUBSCRIBE, [...nextPacketId(), ...mqttString(subscribed)]));
+  }
+  ws.send(packet(SUBSCRIBE, [...nextPacketId(), ...mqttString(filter), 0]));
+  subscribed = filter;
+}
+
+// A QoS 0 PUBLISH: topic string, then the payload (QoS 1/2 carry a packet id first)
+function onPublish(header, body) {
+  const qos = (header >> 1) & 0x03;
+  const len = (body[0] << 8) | body[1];
+  const topic = utf8d.decode(body.subarray(2, 2 + len));
+  const start = 2 + len + (qos > 0 ? 2 : 0);
+  const payload = utf8d.decode(body.subarray(start));
+  onMessage(topic, payload);
+}
+
+setInterval(() => { if (online) ws.send(packet(PINGREQ)); }, KEEPALIVE_S * 1000 / 2);
+
+function setStatus(state, text) {
+  const status = document.getElementById('status');
+  status.className = 'status ' + state;
+  status.textContent = text;
+}
+
+// ---- The board ------------------------------------------------------------
+
+const cards = new Map();     // topic -> {el, count, last, values[], ...}
+let total = 0;
+const recent = [];           // timestamps of the last seconds' messages, for the rate
+
+const cardsEl = document.getElementById('cards');
+const emptyEl = document.getElementById('empty');
+const logEl = document.getElementById('log');
+
+// What is fixed in the filter is not worth repeating on every card
+function prefixOf(f) {
+  const i = f.search(/[+#]/);
+  return i < 0 ? f.replace(/[^/]*$/, '') : f.slice(0, i);
+}
+
+// The number a payload carries, if any: 123, 12.5, {"steps": 123}, {"n": 4, "bpm": 72}
+function numberOf(payload) {
+  const s = payload.trim();
+  if (/^[-+]?\d+(\.\d+)?$/.test(s)) return { n: Number(s), key: null };
+  if (s.startsWith('{')) {
+    try {
+      const obj = JSON.parse(s);
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v === 'number') return { n: v, key: k };
+        if (typeof v === 'string' && /^[-+]?\d+(\.\d+)?$/.test(v.trim())) return { n: Number(v), key: k };
+      }
+    } catch (e) { /* not JSON after all */ }
+  }
+  return null;
+}
+
+function onMessage(topic, payload) {
+  total++;
+  const now = Date.now();
+  recent.push(now);
+  let card = cards.get(topic);
+  if (!card) {
+    card = makeCard(topic);
+    cards.set(topic, card);
+    emptyEl.hidden = true;
+  }
+  card.count++;
+  card.last = now;
+  card.payload = payload;
+  const num = numberOf(payload);
+  if (num) {
+    card.values.push(num.n);
+    if (card.values.length > HISTORY) card.values.shift();
+    card.key = num.key;
+  }
+  renderCard(card);
+  card.el.classList.add('fresh');
+  clearTimeout(card.flash);
+  card.flash = setTimeout(() => card.el.classList.remove('fresh'), 400);
+  addLog(now, topic, payload);
+  document.getElementById('n-topics').textContent = cards.size;
+  document.getElementById('n-msgs').textContent = total;
+}
+
+function makeCard(topic) {
+  const el = document.createElement('article');
+  el.className = 'card';
+  el.innerHTML = '<div class="topic"></div><div class="value"></div>'
+    + '<svg class="spark" viewBox="0 0 300 48" preserveAspectRatio="none"><polyline points=""></polyline><circle class="dot" r="3" cx="-10" cy="0"></circle></svg>'
+    + '<div class="meta"><span class="count"></span><span class="ago"></span></div>';
+  const prefix = prefixOf(filter);
+  const short = topic.startsWith(prefix) ? topic.slice(prefix.length) : topic;
+  const parts = short.split('/');
+  const head = parts.shift();
+  el.querySelector('.topic').innerHTML = '<b></b>' + (parts.length ? '<span></span>' : '');
+  el.querySelector('.topic b').textContent = head || topic;
+  if (parts.length) el.querySelector('.topic span').textContent = ' / ' + parts.join('/');
+  // Alphabetical, so a card keeps its place on the wall
+  const after = [...cardsEl.querySelectorAll('.card')].find((c) => c.dataset.topic > topic);
+  el.dataset.topic = topic;
+  cardsEl.insertBefore(el, after || null);
+  return { el, topic, count: 0, last: 0, payload: '', values: [], key: null, flash: 0 };
+}
+
+function renderCard(card) {
+  const valueEl = card.el.querySelector('.value');
+  const num = numberOf(card.payload);
+  if (num) {
+    valueEl.className = 'value';
+    valueEl.textContent = formatNumber(num.n);
+    if (num.key) {
+      const unit = document.createElement('span');
+      unit.className = 'unit';
+      unit.textContent = num.key;
+      valueEl.appendChild(unit);
+    }
+  } else {
+    valueEl.className = 'value text';
+    valueEl.textContent = card.payload.length > 120 ? card.payload.slice(0, 117) + '…' : (card.payload || '(empty)');
+  }
+  card.el.querySelector('.count').textContent = card.count + (card.count === 1 ? ' message' : ' messages');
+  drawSpark(card);
+  renderAge(card);
+}
+
+function formatNumber(n) {
+  if (Number.isInteger(n)) return n.toLocaleString('en-US');
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+function drawSpark(card) {
+  const svg = card.el.querySelector('.spark');
+  const line = svg.querySelector('polyline');
+  const dot = svg.querySelector('.dot');
+  const v = card.values;
+  if (v.length < 2) { line.setAttribute('points', ''); dot.setAttribute('cx', -10); svg.style.visibility = v.length ? 'visible' : 'hidden'; return; }
+  svg.style.visibility = 'visible';
+  const min = Math.min(...v), max = Math.max(...v);
+  const span = max - min || 1;
+  const W = 300, H = 48, pad = 4;
+  const pts = v.map((y, i) => {
+    const x = (i / (v.length - 1)) * (W - 2 * pad) + pad;
+    const yy = H - pad - ((y - min) / span) * (H - 2 * pad);
+    return [x, yy];
+  });
+  line.setAttribute('points', pts.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' '));
+  const lastPt = pts[pts.length - 1];
+  dot.setAttribute('cx', lastPt[0].toFixed(1));
+  dot.setAttribute('cy', lastPt[1].toFixed(1));
+}
+
+function renderAge(card) {
+  const s = Math.round((Date.now() - card.last) / 1000);
+  card.el.querySelector('.ago').textContent = s < 2 ? 'just now' : s < 60 ? s + ' s ago' : Math.round(s / 60) + ' min ago';
+  card.el.classList.toggle('stale', s > STALE_S);
+}
+
+function addLog(ts, topic, payload) {
+  const li = document.createElement('li');
+  const t = new Date(ts);
+  const time = [t.getHours(), t.getMinutes(), t.getSeconds()].map((x) => String(x).padStart(2, '0')).join(':');
+  li.innerHTML = '<span class="t"></span><span class="k"></span><span class="p"></span>';
+  li.querySelector('.t').textContent = time;
+  li.querySelector('.k').textContent = topic;
+  li.querySelector('.p').textContent = payload;
+  logEl.prepend(li);
+  while (logEl.children.length > LOG_LINES) logEl.lastChild.remove();
+}
+
+// Ages, staleness and the rate tick once a second
+setInterval(() => {
+  const now = Date.now();
+  while (recent.length && recent[0] < now - 5000) recent.shift();
+  document.getElementById('rate').textContent = (recent.length / 5).toFixed(recent.length < 5 ? 1 : 0);
+  for (const card of cards.values()) renderAge(card);
+}, 1000);
+
+function clearBoard() {
+  for (const card of cards.values()) card.el.remove();
+  cards.clear();
+  total = 0;
+  recent.length = 0;
+  logEl.innerHTML = '';
+  emptyEl.hidden = false;
+  document.getElementById('n-topics').textContent = 0;
+  document.getElementById('n-msgs').textContent = 0;
+  document.getElementById('empty-filter').textContent = filter;
+}
+
+// ---- The strip the students copy from -------------------------------------
+
+const SSID = params.get('ssid') || 'iot-kit';
+const PASS = params.get('pass') || 'SuperStrongPassword1234';
+const BROKER_HOST = params.get('host')
+  || (location.protocol.startsWith('http') && location.hostname !== 'localhost' ? location.hostname : '192.168.50.1');
+const BROKER_PORT = params.get('port') || '1883';
+
+function renderHowto() {
+  document.getElementById('h-ssid').textContent = SSID;
+  document.getElementById('h-pass').textContent = PASS;
+  document.getElementById('h-broker').textContent = BROKER_HOST;
+  document.getElementById('h-port').textContent = BROKER_PORT;
+  // bme/s04/steps/#  ->  bme/s04/steps/<your-name>
+  document.getElementById('h-topic').textContent = filter.replace(/\/?[+#]([/].*)?$/, '/<your-name>');
+  document.getElementById('howto').hidden = params.get('howto') === '0';
+}
+
+const filterEl = document.getElementById('filter');
+filterEl.value = filter;
+document.getElementById('empty-filter').textContent = filter;
+renderHowto();
+
+document.getElementById('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = filterEl.value.trim();
+  if (!f) return;
+  filter = f;
+  const url = new URL(location);
+  url.searchParams.set('topic', filter);
+  history.replaceState(null, '', url);
+  clearBoard();
+  renderHowto();
+  sendSubscribe();
+  filterEl.blur();
+});
+document.getElementById('clear').addEventListener('click', clearBoard);
+
+connect();
+</script>
+</body>
+</html>

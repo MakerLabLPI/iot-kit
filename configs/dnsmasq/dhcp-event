@@ -1,0 +1,9 @@
+#!/bin/sh
+# dnsmasq lease hook (dhcp-script in configs/dnsmasq/iot-kit.conf): runs on
+# every lease change, as the dnsmasq user. Publishes it on the kit's broker
+# so that the LED strip (tools/leds) flashes the moment a device gets its
+# address, i.e. right after it joined the WiFi.
+#   $1 = add | old | del   $2 = MAC   $3 = IP   $4 = hostname (may be empty)
+[ "$1" = del ] && exit 0
+exec mosquitto_pub -h 127.0.0.1 -t bme/s04/net/dhcp \
+  -m "{\"event\":\"$1\",\"mac\":\"$2\",\"ip\":\"$3\",\"name\":\"${4:-}\"}" 2>/dev/null

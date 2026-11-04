@@ -1,0 +1,461 @@
+<!doctype html>
+<!--
+  Heartbeat and breath: a heart beats and lungs breathe on the screen, each
+  on its own rhythm, and the ESP32s follow both at the same time.
+
+  The clocks run on the Pi (rhythms.py, Docker), so the boards keep
+  beating when this computer sleeps or shows something else. This page only
+  shows the rhythms and remote-controls them: every laptop that opens it
+  sees the same thing. Open the file in a browser on a computer on the kit
+  network: http://192.168.50.1:8002/ (served by the same service), or open
+  this file directly. No internet and no library needed, the page speaks
+  MQTT over WebSockets itself (port 9001 of the broker).
+
+  Topics the boards follow (QoS 0, not retained):
+            bme/s04/heartbeat   one message per beat,   payload the tempo in BPM ("72")
+            bme/s04/breath      one message per breath, payload the rate per minute ("12")
+  State, retained by the broker, shown by the page:
+            bme/s04/heartbeat/rate, .../running ("1" or "0"), same under bme/s04/breath/
+  Control, sent by the page's sliders and buttons:
+            bme/s04/heartbeat/set, bme/s04/breath/set   a rate, "pause" or "start"
+
+  Other broker or topics, e.g. to try it against a broker on this computer:
+    index.html?broker=ws://localhost:9001&heartbeat=test/heartbeat&breath=test/breath
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heartbeat and breath</title>
+<style>
+  :root {
+    --bg: #0e0a12;
+    --fg: #f4eef2;
+    --dim: #8d8091;
+    --heart: #ff2d55;
+    --breath: #4fc3f7;
+    --ok: #3ddc84;
+    --warn: #ffb020;
+    --bad: #ff5a4f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    min-height: 0;
+  }
+  .rhythm {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    min-height: 0;
+    --color: var(--heart);
+  }
+  .rhythm.breath { --color: var(--breath); }
+  .rhythm.heart {
+    background: radial-gradient(circle at 50% 40%, #24101d 0%, var(--bg) 65%);
+  }
+  .rhythm.breath {
+    background: radial-gradient(circle at 50% 40%, #0f1b26 0%, var(--bg) 65%);
+    border-left: 1px solid rgb(255 255 255 / 8%);
+  }
+
+  .stage {
+    position: relative;
+    display: grid;
+    place-items: center;
+    min-height: 0;
+  }
+  .figure, .ring {
+    grid-area: 1 / 1;
+    width: min(48vh, 38vw);
+    aspect-ratio: 1;
+  }
+  .figure {
+    fill: var(--color);
+    filter: drop-shadow(0 0 4vh color-mix(in srgb, var(--color) 55%, transparent));
+    transition: fill .4s, filter .4s, opacity .4s;
+  }
+  .ring {
+    border: .5vh solid var(--color);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .rhythm.paused .figure {
+    fill: #5c4a55;
+    filter: none;
+    opacity: .7;
+  }
+  .rhythm.breath.paused .figure { fill: #465660; }
+
+  .tempo {
+    text-align: center;
+    padding-bottom: 3vh;
+  }
+  .rate {
+    font-size: 10vh;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .rate small {
+    font-size: 2.6vh;
+    font-weight: 500;
+    color: var(--dim);
+    letter-spacing: .15em;
+    margin-left: .3em;
+  }
+  .controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 2vh;
+    margin-top: 2vh;
+  }
+  button {
+    font: inherit;
+    font-size: 2.2vh;
+    min-width: 6em;
+    padding: .5em 1em;
+    color: var(--fg);
+    background: rgb(255 255 255 / 8%);
+    border: 1px solid rgb(255 255 255 / 18%);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  button:hover { background: rgb(255 255 255 / 15%); }
+  input[type=range] {
+    width: min(26vw, 40vh);
+    accent-color: var(--color);
+  }
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1vh 4vh;
+    padding: 2vh 3vh;
+    font-size: 2.2vh;
+    color: var(--dim);
+    background: rgb(0 0 0 / 30%);
+    border-top: 1px solid rgb(255 255 255 / 8%);
+    user-select: text;
+  }
+  footer code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg);
+  }
+  .status::before {
+    content: "";
+    display: inline-block;
+    width: 1.3vh;
+    height: 1.3vh;
+    margin-right: .6em;
+    border-radius: 50%;
+    background: var(--warn);
+  }
+  .status.online::before { background: var(--ok); }
+  .status.offline::before { background: var(--bad); }
+  .status.offline { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<main>
+  <section class="rhythm heart" id="heart">
+    <div class="stage">
+      <svg class="figure" viewBox="-4 -4 40 37.6" aria-label="heart">
+        <path d="M23.6,0c-3.4,0-6.3,2.7-7.6,5.6C14.7,2.7,11.8,0,8.4,0C3.8,0,0,3.8,0,8.4
+                 c0,9.4,9.5,11.9,16,21.2c6.1-9.3,16-12.1,16-21.2C32,3.8,28.2,0,23.6,0z"/>
+      </svg>
+    </div>
+    <div class="tempo">
+      <div class="rate"><span class="value">60</span><small>BPM</small></div>
+      <div class="controls">
+        <button class="toggle" title="Space">Pause</button>
+        <input class="slider" type="range" min="30" max="180" step="1" value="60"
+               title="Arrow up / down" aria-label="Heartbeat tempo in BPM">
+      </div>
+    </div>
+  </section>
+
+  <section class="rhythm breath" id="breath">
+    <div class="stage">
+      <svg class="figure" viewBox="0 0 100 100" aria-label="lungs">
+        <!-- trachea and bronchi -->
+        <rect x="46.5" y="4" width="7" height="34" rx="3.5"/>
+        <path d="M50 30 L38 46 M50 30 L62 46" stroke="var(--color)" stroke-width="5"
+              stroke-linecap="round" fill="none"/>
+        <!-- lobes -->
+        <path d="M43 40 C 28 40, 10 56, 10 78 C 10 92, 24 98, 36 94 C 43 91, 43 82, 43 72 Z"/>
+        <path d="M57 40 C 72 40, 90 56, 90 78 C 90 92, 76 98, 64 94 C 57 91, 57 82, 57 72 Z"/>
+      </svg>
+    </div>
+    <div class="tempo">
+      <div class="rate"><span class="value">12</span><small>/MIN</small></div>
+      <div class="controls">
+        <button class="toggle" title="B">Pause</button>
+        <input class="slider" type="range" min="4" max="30" step="1" value="12"
+               title="Arrow right / left" aria-label="Breaths per minute">
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span class="status" id="status">connecting</span>
+  <span>heartbeat <code id="heart-topic"></code> received <code id="heart-sent">0</code></span>
+  <span>breath <code id="breath-topic"></code> received <code id="breath-sent">0</code></span>
+</footer>
+
+<script>
+const params = new URLSearchParams(location.search);
+// Served from the Pi: the broker is on the same host. Opened as a file: the kit's address.
+const BROKER = params.get('broker')
+  || (location.protocol.startsWith('http') ? 'ws://' + location.hostname + ':9001' : 'ws://192.168.50.1:9001');
+const HEARTBEAT_TOPIC = params.get('heartbeat') || 'bme/s04/heartbeat';
+const BREATH_TOPIC = params.get('breath') || 'bme/s04/breath';
+
+const KEEPALIVE_S = 30;
+const RECONNECT_MS = 2000;
+
+// ---- MQTT 3.1.1 over WebSockets, the little a page needs ------------------
+
+const utf8 = new TextEncoder();
+const utf8d = new TextDecoder();
+
+// A string as MQTT wants it: 2 bytes of length, then the text
+function mqttString(s) {
+  const bytes = utf8.encode(s);
+  return [bytes.length >> 8, bytes.length & 0xff, ...bytes];
+}
+
+function packet(type, body = []) {
+  // "Remaining length": 7 bits per byte, high bit set while more follow
+  const length = [];
+  let n = body.length;
+  do {
+    const digit = n % 128;
+    n = Math.floor(n / 128);
+    length.push(n > 0 ? digit | 0x80 : digit);
+  } while (n > 0);
+  return new Uint8Array([type, ...length, ...body]);
+}
+
+const CONNECT = 0x10, CONNACK = 0x20, PUBLISH = 0x30, SUBSCRIBE = 0x82, PINGREQ = 0xc0;
+
+const clientId = 'heartbeat-' + Math.random().toString(16).slice(2, 10);
+const handlers = {};          // topic -> function(payload)
+let ws = null;
+let online = false;
+let packetId = 0;
+
+function connect() {
+  setStatus('connecting', 'connecting to ' + BROKER);
+  ws = new WebSocket(BROKER, 'mqtt');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    const cleanSession = 0x02;
+    ws.send(packet(CONNECT, [
+      ...mqttString('MQTT'), 4, cleanSession, 0, KEEPALIVE_S,
+      ...mqttString(clientId),
+    ]));
+  };
+
+  ws.onmessage = (event) => {
+    // One frame may carry several packets
+    const bytes = new Uint8Array(event.data);
+    let i = 0;
+    while (i < bytes.length) {
+      const type = bytes[i] & 0xf0;
+      let n = 0, shift = 1, j = i + 1;
+      do { n += (bytes[j] & 0x7f) * shift; shift *= 128; } while (bytes[j++] & 0x80);
+      const body = bytes.subarray(j, j + n);
+      i = j + n;
+      if (type === CONNACK) onConnack(body);
+      else if (type === PUBLISH) onPublish(body);
+    }
+  };
+
+  // Also called when the connection could not be opened at all
+  ws.onclose = () => {
+    online = false;
+    setStatus('offline', BROKER + ' unreachable, retrying');
+    setTimeout(connect, RECONNECT_MS);
+  };
+}
+
+function onConnack(body) {
+  if (body[1] !== 0) {
+    setStatus('offline', 'broker refused the connection (code ' + body[1] + ')');
+    ws.close();
+    return;
+  }
+  online = true;
+  setStatus('online', 'connected to ' + BROKER);
+  // One SUBSCRIBE for every topic we listen to, QoS 0
+  packetId = (packetId % 65535) + 1;
+  const filters = Object.keys(handlers).flatMap((t) => [...mqttString(t), 0]);
+  ws.send(packet(SUBSCRIBE, [packetId >> 8, packetId & 0xff, ...filters]));
+}
+
+// A QoS 0 PUBLISH: topic string, then the payload
+function onPublish(body) {
+  const len = (body[0] << 8) | body[1];
+  const topic = utf8d.decode(body.subarray(2, 2 + len));
+  const payload = utf8d.decode(body.subarray(2 + len));
+  const handler = handlers[topic];
+  if (handler) handler(payload);
+}
+
+function subscribe(topic, handler) {
+  handlers[topic] = handler;   // sent to the broker at the next CONNACK
+}
+
+function publish(topic, payload) {
+  if (!online) return false;
+  ws.send(packet(PUBLISH, [...mqttString(topic), ...utf8.encode(payload)]));
+  return true;
+}
+
+// The broker drops a client that stays silent
+setInterval(() => {
+  if (online) ws.send(packet(PINGREQ));
+}, KEEPALIVE_S * 1000 / 2);
+
+function setStatus(state, text) {
+  const status = document.getElementById('status');
+  status.className = 'status ' + state;
+  status.textContent = text;
+}
+
+// ---- A rhythm: something that happens N times per minute -------------------
+// The clock is on the Pi. Each beat arrives as a message carrying the rate,
+// which is all `draw(figure, stage, period)` needs; the slider and the button
+// only send wishes on <topic>/set and show what the Pi answers on
+// <topic>/rate and <topic>/running.
+function rhythm(id, topic, draw) {
+  const panel = document.getElementById(id);
+  const stage = panel.querySelector('.stage');
+  const figure = panel.querySelector('.figure');
+  const slider = panel.querySelector('.slider');
+  const toggle = panel.querySelector('.toggle');
+  const value = panel.querySelector('.value');
+  const receivedEl = document.getElementById(id + '-sent');
+
+  let rate = Number(slider.value);
+  let running = true;
+  let received = 0;
+
+  subscribe(topic, (payload) => {
+    const r = Number(payload);
+    if (r > 0) draw(figure, stage, 60000 / r);
+    received += 1;
+    receivedEl.textContent = received;
+  });
+  subscribe(topic + '/rate', (payload) => {
+    rate = Number(payload);
+    slider.value = rate;
+    value.textContent = rate;
+  });
+  subscribe(topic + '/running', (payload) => {
+    running = payload === '1';
+    panel.classList.toggle('paused', !running);
+    toggle.textContent = running ? 'Pause' : 'Start';
+  });
+
+  const setRunning = (on) => publish(topic + '/set', on ? 'start' : 'pause');
+  const setRate = (v) => {
+    const r = Math.min(Number(slider.max), Math.max(Number(slider.min), Math.round(v)));
+    publish(topic + '/set', String(r));
+  };
+
+  toggle.addEventListener('click', () => setRunning(!running));
+  slider.addEventListener('input', (event) => setRate(event.target.value));
+  document.getElementById(id + '-topic').textContent = topic;
+
+  return {
+    toggle: () => setRunning(!running),
+    setRunning,
+    nudge: (delta) => setRate(rate + delta),
+    get running() { return running; },
+  };
+}
+
+function ripple(stage) {
+  const ring = document.createElement('div');
+  ring.className = 'ring';
+  stage.append(ring);
+  ring.animate(
+    [
+      { transform: 'scale(0.7)', opacity: 0.5 },
+      { transform: 'scale(2.4)', opacity: 0 },
+    ],
+    { duration: 1100, easing: 'ease-out' },
+  ).finished.then(() => ring.remove());
+}
+
+// Lub-dub
+function drawBeat(figure, stage, period) {
+  figure.animate(
+    [
+      { transform: 'scale(1)' },
+      { transform: 'scale(1.2)', offset: 0.12 },
+      { transform: 'scale(1.03)', offset: 0.3 },
+      { transform: 'scale(1.13)', offset: 0.42 },
+      { transform: 'scale(1)', offset: 0.75 },
+      { transform: 'scale(1)' },
+    ],
+    { duration: Math.min(period * 0.9, 650), easing: 'ease-out' },
+  );
+  ripple(stage);
+}
+
+// Inhale for 2 s (the time the LED stays on), then exhale
+function drawBreath(figure, stage, period) {
+  const inhale = Math.min(2000, period * 0.45);
+  const exhale = Math.min(period - inhale, 2500);
+  figure.animate(
+    [
+      { transform: 'scale(1)', opacity: 0.75 },
+      { transform: 'scale(1.18)', opacity: 1, offset: inhale / (inhale + exhale) },
+      { transform: 'scale(1)', opacity: 0.75 },
+    ],
+    { duration: inhale + exhale, easing: 'ease-in-out' },
+  );
+  ripple(stage);
+}
+
+const heart = rhythm('heart', HEARTBEAT_TOPIC, drawBeat);
+const breath = rhythm('breath', BREATH_TOPIC, drawBreath);
+
+document.addEventListener('keydown', (event) => {
+  // The buttons and the sliders handle their own keys
+  if (event.target.closest('button, input')) return;
+  const step = event.shiftKey ? 10 : 1;
+  if (event.code === 'Space') heart.toggle();
+  else if (event.code === 'KeyB') breath.toggle();
+  else if (event.code === 'ArrowUp') heart.nudge(step);
+  else if (event.code === 'ArrowDown') heart.nudge(-step);
+  else if (event.code === 'ArrowRight') breath.nudge(step);
+  else if (event.code === 'ArrowLeft') breath.nudge(-step);
+  else return;
+  event.preventDefault();
+});
+
+connect();
+</script>
+</body>
+</html>

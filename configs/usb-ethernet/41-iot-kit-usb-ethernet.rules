@@ -1,0 +1,9 @@
+# iot-kit: the USB-Ethernet adapter of the WAN uplink (Realtek RTL8156).
+#
+# After a cold boot it shows up as a virtual CD-ROM holding its Windows
+# drivers (0bda:8151) instead of a network card (0bda:8156). Nothing talks it
+# out of that mode: it accepts the standard eject sequence and ignores it
+# (usb_modeswitch was tried), it has a single USB configuration, and a USB
+# re-enumeration leaves it as it is. Only a power cycle helps, and that is
+# what iot-kit-usb-ethernet.service does, once per boot.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="8151", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iot-kit-usb-ethernet.service"

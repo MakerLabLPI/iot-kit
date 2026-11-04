@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Traitor's Game</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- handshake: cooperate -->
+    <symbol id="i-hand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12l4-4 4 1 3 3"/><path d="M22 12l-4-4-4 1"/>
+      <path d="M8 13l2 2a1.5 1.5 0 0 0 2-2"/><path d="M10 15l2 2a1.5 1.5 0 0 0 2-2"/><path d="M12 17l2 2a1.5 1.5 0 0 0 2-2"/>
+      <path d="M2 12v6l4 1"/><path d="M22 12v6l-4 1"/>
+    </symbol>
+    <!-- dagger: betray -->
+    <symbol id="i-dagger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.5 3.5L20.5 9.5 10 20 4 14z"/><path d="M4 14l-2 2"/><path d="M7 11l6 6"/><path d="M14.5 3.5L20.5 9.5"/>
+    </symbol>
+    <!-- dice: random timeout move -->
+    <symbol id="i-dice" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="3"/>
+      <circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="16" cy="8" r="1.2" fill="currentColor"/>
+      <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+      <circle cx="8" cy="16" r="1.2" fill="currentColor"/><circle cx="16" cy="16" r="1.2" fill="currentColor"/>
+    </symbol>
+    <!-- bench: sits out -->
+    <symbol id="i-bench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 10h18"/><path d="M4 10v-4h16v4"/><path d="M5 10v9"/><path d="M19 10v9"/><path d="M3 15h18"/>
+    </symbol>
+    <!-- tick: locked in -->
+    <symbol id="i-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12.5l4.5 4.5L19 7"/>
+    </symbol>
+    <!-- lock: waiting for a move -->
+    <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/>
+    </symbol>
+  </defs>
+</svg>
+
+<main id="main">
+  <header class="top">
+    <table class="rules" aria-label="scoring">
+      <tr><th colspan="2">Cooperate or betray. Points per round:</th></tr>
+      <tr><td><span class="C"><svg aria-hidden="true"><use href="#i-hand"/></svg>Cooperate</span><span class="vs">VS</span><span class="C"><svg aria-hidden="true"><use href="#i-hand"/></svg>Cooperate</span></td><td class="n"><b>3</b> · <b>3</b></td><td>nice handshake</td></tr>
+      <tr><td><span class="B"><svg aria-hidden="true"><use href="#i-dagger"/></svg>Betray</span><span class="vs">VS</span><span class="B"><svg aria-hidden="true"><use href="#i-dagger"/></svg>Betray</span></td><td class="n"><b>1</b> · <b>1</b></td><td>trust issues</td></tr>
+      <tr><td><span class="B"><svg aria-hidden="true"><use href="#i-dagger"/></svg>Betray</span><span class="vs">VS</span><span class="C"><svg aria-hidden="true"><use href="#i-hand"/></svg>Cooperate</span></td><td class="n"><b>5</b> · <b>0</b></td><td>backstabbed</td></tr>
+    </table>
+    <div class="clock">
+      <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring-bg" cx="60" cy="60" r="52"/>
+        <circle class="ring-fg" id="ring" cx="60" cy="60" r="52"/>
+      </svg>
+      <div class="clock-text"><div class="secs" id="secs"></div></div>
+    </div>
+    <div class="phase">
+      <div class="round-no" id="round-no">Round —</div>
+      <div class="phase-label" id="phase-label">Waiting for players</div>
+      <div class="phase-hint" id="phase-hint"></div>
+    </div>
+    <div class="reset" id="reset">
+      <button class="btn ghost" id="reset-btn" type="button">Reset scores</button>
+      <span class="confirm" id="reset-confirm" hidden>
+        Wipe every score? <button class="btn danger" id="reset-yes" type="button">Yes, reset</button>
+        <button class="btn ghost" id="reset-no" type="button">No</button>
+      </span>
+    </div>
+  </header>
+
+  <section class="matches" id="matches"></section>
+
+  <section class="board">
+    <table class="lb">
+      <thead>
+        <tr><th class="r">#</th><th>Player</th><th class="n">Points</th><th class="n">Rounds</th><th class="n">Avg</th></tr>
+      </thead>
+      <tbody id="lb"></tbody>
+    </table>
+    <p class="empty" id="lb-empty">Nobody yet. Publish <code id="join-topic">bme/s04/game/&lt;name&gt;/join</code> to enter.</p>
+  </section>
+</main>
+
+<aside class="log" id="log" aria-label="live MQTT log">
+  <div class="log-head"><span id="log-title">bme/s04/game/#</span><span class="mqtt" id="mqtt">broker</span></div>
+  <div class="log-lines" id="log-lines"></div>
+</aside>
+
+<script id="initial" type="application/json">__INITIAL_STATE__</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

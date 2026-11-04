@@ -1,0 +1,32 @@
+# The "secret" exercise: an HTTP server on port 8001 that answers
+# "Hello World" on /secret. Started by hand for the exercise:
+#
+#   docker compose up -d      # start
+#   docker compose logs -f    # who asked what
+#   docker compose down       # stop
+#
+# On the kit's docker network, port 8001 published: the log shows the real
+# address of every client.
+name: ex01-secret
+
+services:
+  secret:
+    build: .
+    image: iot-kit/ex01-secret:local
+    container_name: ex01-secret
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    networks:
+      - kit
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8001/secret"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  kit:
+    external: true
+    name: iot-kit
