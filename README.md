@@ -2,6 +2,17 @@
 
 **A portable, self-contained network box for ESP32 / IoT workshops, built on a Raspberry Pi 5.**
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/kit-closed.jpg" alt="The closed iot-kit case, a white box with MAKERLAB and IoT Kit printed on the lid"></td>
+    <td width="50%"><img src="docs/images/kit-open.jpg" alt="The open iot-kit case: the UniFi access point mounted in the lid; the Raspberry Pi 5, PoE+ injector and power supply in the base"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Closed: one power cable in, WiFi out.</sub></td>
+    <td align="center"><sub>Open: the UniFi AP in the lid; the Pi 5, PoE+ injector and power supply in the base.</sub></td>
+  </tr>
+</table>
+
 Plug in the Pi and its access point and you get, in any classroom, your own
 WiFi with DHCP, DNS, an MQTT broker, NTP time and a set of projector-ready web
 tools: no school network, no internet, no accounts needed. When an internet
